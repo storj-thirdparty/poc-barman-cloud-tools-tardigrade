@@ -30,7 +30,7 @@ import shutil
 import signal
 import tarfile
 from functools import partial
-from io import BytesIO, RawIOBase
+from io import BytesIO, RawIOBase, BufferedReader
 from tempfile import NamedTemporaryFile
 
 from barman.backup_executor import (ConcurrentBackupStrategy,
@@ -41,6 +41,9 @@ from barman.postgres_plumbing import EXCLUDE_LIST, PGDATA_EXCLUDE_LIST
 from barman.utils import (BarmanEncoder, force_str, human_readable_timedelta,
                           pretty_size, total_seconds)
 
+from uplink_python.uplink import LibUplinkPy, c
+import uplink_python.constants as uplink_errors
+
 try:
     import boto3
     from botocore.exceptions import ClientError, EndpointConnectionError
@@ -49,10 +52,10 @@ except ImportError:
 
 try:
     # Python 3.x
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse, urljoin
 except ImportError:
     # Python 2.x
-    from urlparse import urlparse
+    from urlparse import urlparse, urljoin
 
 try:
     # Python 3.x
@@ -1425,3 +1428,648 @@ class S3BackupCatalog(object):
                 raise SystemExit(1)
 
         return backup_files
+
+
+class CloudInterfaceStorj(object):
+    def __init__(self, url, access, jobs=2):
+        """
+        Create a new Storj interface given the Storj destination url and the
+        access
+
+        :param str url: Full URL of the cloud destination/source
+        :param int jobs: How many sub-processes to use for asynchronous
+          uploading, defaults to 2.
+        :param str access: Storj access
+        """
+        self.url = url
+        self.access = access
+
+        # Extract information from the destination URL
+        parsed_url = urlparse(url)
+        # If netloc is not present, the Storj  url is badly formatted.
+        if parsed_url.netloc == '' or parsed_url.scheme != 'sj':
+            raise ValueError('Invalid Storj URL address: %s' % url)
+        self.bucket_name = parsed_url.netloc
+        self.bucket_exists = None
+
+        self.path = parsed_url.path.lstrip('/')
+        if self.path != "":
+            self.path = + '/'
+
+        # TODO: uncomment this part when the first method that requires them
+        # be implemented
+        """
+        # The worker process and the shared queue are created only when
+        # needed
+        self.queue = None
+        self.result_queue = None
+        self.errors_queue = None
+        self.done_queue = None
+        self.error = None
+        self.abort_requested = False
+        self.worker_processes_count = jobs
+        self.worker_processes = []
+
+        # The parts DB is a dictionary mapping each bucket key name to a list
+        # of uploaded parts.
+        # This structure is updated by the _refresh_parts_db method call
+        self.parts_db = collections.defaultdict(list)
+
+        # Statistics about uploads
+        self.upload_stats = collections.defaultdict(FileUploadStatistics)
+        """
+
+        # Uplink part
+        self.uplink = LibUplinkPy()
+
+        access_result, err = self.uplink.parse_access(access)
+        if err is not None:
+            raise CloudInterfaceError("error when parsing the access",  err,
+                                      access_result.error.contents.code)
+        self.storj_access = access_result.access
+
+        project_result, err = self.uplink.open_project(self.storj_access)
+        if err is not None:
+            raise CloudInterfaceError("error opening the project", err,
+                                      project_result.error.contents.code)
+        self.storj_project = project_result.project
+
+    def close(self):
+        """
+        Wait for all the asynchronous operations to be done
+        """
+        # TODO: uncomment when queue methods are implemented/adapated
+        """
+        if self.queue:
+            for _ in self.worker_processes:
+                self.queue.put(None)
+
+            for process in self.worker_processes:
+                process.join()
+        """
+
+    def abort(self):
+        """
+        Abort all the operations
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        if self.queue:
+            for process in self.worker_processes:
+                os.kill(process.pid, signal.SIGINT)
+        self.close()
+        """
+
+    def _ensure_async(self):
+        """
+        Ensure that the asynchronous execution infrastructure is up
+        and the worker process is running
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        if self.queue:
+            return
+
+        self.queue = multiprocessing.JoinableQueue(
+            maxsize=self.worker_processes_count)
+        self.result_queue = multiprocessing.Queue()
+        self.errors_queue = multiprocessing.Queue()
+        self.done_queue = multiprocessing.Queue()
+        for process_number in range(self.worker_processes_count):
+            process = multiprocessing.Process(
+                target=self.worker_process_main,
+                args=(process_number,))
+            process.start()
+            self.worker_processes.append(process)
+        """
+
+    def _retrieve_results(self):
+        """
+        Receive the results from workers and update the local parts DB,
+        making sure that each part list is sorted by part number
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        # Wait for all the current jobs to be completed
+        self.queue.join()
+
+        touched_keys = []
+        while not self.result_queue.empty():
+            result = self.result_queue.get()
+            touched_keys.append(result["key"])
+            self.parts_db[result["key"]].append(result["part"])
+
+            # Save the upload end time of the part
+            stats = self.upload_stats[result["key"]]
+            stats.set_part_end_time(result["part_number"], result['end_time'])
+
+        for key in touched_keys:
+            self.parts_db[key] = sorted(
+                self.parts_db[key],
+                key=operator.itemgetter("PartNumber"))
+
+        # Read the results of completed uploads
+        while not self.done_queue.empty():
+            result = self.done_queue.get()
+            self.upload_stats[result["key"]].update(result)
+
+        # Raise an error if a job failed
+        self._handle_async_errors()
+        """
+
+    def _handle_async_errors(self):
+        """
+        If an upload error has been discovered, stop the upload
+        process, stop all the workers and raise an exception
+        :return:
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        # If an error has already been reported, do nothing
+        if self.error:
+            return
+
+        try:
+            self.error = self.errors_queue.get_nowait()
+        except EmptyQueue:
+            return
+
+        logging.error("Error received from upload worker: %s", self.error)
+        self.abort()
+        raise CloudUploadingError(self.error)
+        """
+
+    def worker_process_main(self, process_number):
+        """
+        Repeatedly grab a task from the queue and execute it, until a task
+        containing "None" is grabbed, indicating that the process must stop.
+
+        :param int process_number: the process number, used in the logging
+        output
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        logging.info("Upload process started (worker %s)", process_number)
+        while True:
+            task = self.queue.get()
+            if not task:
+                self.queue.task_done()
+                break
+
+            try:
+                self.worker_process_execute_job(task, process_number)
+            except Exception as exc:
+                logging.error('Upload error: %s (worker %s)',
+                              force_str(exc), process_number)
+                logging.debug('Exception details:', exc_info=exc)
+                self.errors_queue.put(force_str(exc))
+            except KeyboardInterrupt:
+                if not self.abort_requested:
+                    logging.info('Got abort request: upload cancelled '
+                                 '(worker %s)', process_number)
+                    self.abort_requested = True
+            finally:
+                self.queue.task_done()
+
+        logging.info("Upload process stopped (worker %s)", process_number)
+        """
+
+    def worker_process_execute_job(self, task, process_number):
+        """
+        Exec a single task
+        :param Dict task: task to execute
+        :param int process_number: the process number, used in the logging
+        output
+        :return:
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        if task["job_type"] == "upload_part":
+            if self.abort_requested:
+                logging.info(
+                    "Skipping '%s', part '%s' (worker %s)" % (
+                        task["key"],
+                        task["part_number"],
+                        process_number))
+                os.unlink(task["body"])
+                return
+            else:
+                logging.info(
+                    "Uploading '%s', part '%s' (worker %s)" % (
+                        task["key"],
+                        task["part_number"],
+                        process_number))
+                with open(task["body"], "rb") as fp:
+                    part = self.upload_part(
+                        task["mpu"],
+                        task["key"],
+                        fp,
+                        task["part_number"])
+                os.unlink(task["body"])
+                self.result_queue.put(
+                    {
+                        "key": task["key"],
+                        "part_number": task["part_number"],
+                        "end_time": datetime.datetime.now(),
+                        "part": part,
+                    })
+        elif task["job_type"] == "complete_multipart_upload":
+            if self.abort_requested:
+                logging.info(
+                    "Aborting %s (worker %s)" % (
+                        task["key"],
+                        process_number))
+                self.abort_multipart_upload(
+                    task["mpu"],
+                    task["key"])
+                self.done_queue.put(
+                    {
+                        "key": task["key"],
+                        "end_time": datetime.datetime.now(),
+                        "status": "aborted"
+                    })
+            else:
+                logging.info(
+                    "Completing '%s' (worker %s)" % (
+                        task["key"],
+                        process_number))
+                self.complete_multipart_upload(
+                    task["mpu"],
+                    task["key"],
+                    task["parts"])
+                self.done_queue.put(
+                    {
+                        "key": task["key"],
+                        "end_time": datetime.datetime.now(),
+                        "status": "done"
+                    })
+        else:
+            raise ValueError("Unknown task: %s", repr(task))
+        """
+
+    def test_connectivity(self):
+        """
+        Test the Storj connectivity trying to access a bucket
+        """
+        try:
+            # We are not even interested in the existence of the bucket,
+            # we just want to try if aws is reachable
+            self.bucket_exists = self.check_bucket_existence(self.bucket_name)
+            return True
+        except CloudInterfaceError as exc:
+            logging.error("Can't connect to Storj: %s", exc)
+            return False
+
+    def check_bucket_existence(self, bucket_name):
+        """
+        Search for the target bucket
+        """
+        bucket_result, err = self.uplink.stat_bucket(self.storj_project,
+                                                     self.bucket_name)
+        if err is None:
+            return True
+
+        if bucket_result.error.contents.code == \
+                uplink_errors.ERROR_BUCKET_NOT_FOUND:
+            return False
+
+        raise CloudInterfaceError("error stating the bucket", err,
+                                  bucket_result.error.contents.code)
+
+    def setup_bucket(self):
+        """
+        Search for the target bucket. Create it if not exists
+        """
+        bucket_result, err = self.uplink.ensure_bucket(
+            self.storj_project, self.bucket_name)
+        if err is not None:
+            self.bucket_exists = False
+            raise CloudInterfaceError("error ensuring bucket", err,
+                                      bucket_result.error.contents.code)
+
+        self.bucket_exists = True
+
+    def list_bucket(self, prefix='', delimiter='/'):
+        """
+        List bucket content in a directory manner
+        :param str prefix:
+        :param str delimiter:
+        :return: List of objects and dirs right under the prefix
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        if prefix.startswith(delimiter):
+            prefix = prefix.lstrip(delimiter)
+
+        res = self.s3.meta.client.list_objects_v2(
+            Bucket=self.bucket_name,
+            Prefix=prefix,
+            Delimiter=delimiter)
+
+        # List "folders"
+        keys = res.get("CommonPrefixes")
+        if keys is not None:
+            for k in keys:
+                yield k.get("Prefix")
+
+        # List "files"
+        objects = res.get("Contents")
+        if objects is not None:
+            for o in objects:
+                yield o.get("Key")
+        """
+
+    def download_file(self, key, dest_path, decompress):
+        """
+        Download a file from S3
+
+        :param str key: The S3 key to download
+        :param str dest_path: Where to put the destination file
+        :param bool decompress: Whenever to decompress this file or not
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        # Open the remote file
+        obj = self.s3.Object(self.bucket_name, key)
+        remote_file = obj.get()['Body']
+
+        # Write the dest file in binary mode
+        with open(dest_path, 'wb') as dest_file:
+            # If the file is not compressed, just copy its content
+            if not decompress:
+                shutil.copyfileobj(remote_file, dest_file)
+                return
+
+            if decompress == 'gzip':
+                source_file = gzip.GzipFile(fileobj=remote_file, mode='rb')
+            elif decompress == 'bzip2':
+                source_file = bz2.BZ2File(remote_file, 'rb')
+            else:
+                raise ValueError("Unknown compression type: %s" % decompress)
+
+            with source_file:
+                shutil.copyfileobj(source_file, dest_file)
+        """
+
+    def remote_open(self, key):
+        """
+        Open a remote S3 object and returns a readable stream
+
+        Returns None is the the Key does not exist
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        try:
+            obj = self.s3.Object(self.bucket_name, key)
+            return StreamingBodyIO(obj.get()['Body'])
+        except ClientError as exc:
+            error_code = exc.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                return None
+            else:
+                raise
+        """
+
+    def extract_tar(self, key, dst):
+        """
+        Extract a tar archive from cloud to the local directory
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        extension = os.path.splitext(key)[-1]
+        compression = '' if extension == '.tar' else extension[1:]
+        tar_mode = 'r|%s' % compression
+        obj = self.s3.Object(self.bucket_name, key)
+        fileobj = obj.get()['Body']
+        with tarfile.open(fileobj=fileobj, mode=tar_mode) as tf:
+            tf.extractall(path=dst)
+        """
+
+    def upload_fileobj(self, fileobj, key):
+        """
+        Synchronously upload the content of a file-like object to a cloud key
+        """
+        key = key.strip('/')
+        remote_obj_key = urljoin(self.path, key)
+        upload_result, err = self.uplink.upload_object(self.storj_project,
+                                                       self.bucket_name,
+                                                       remote_obj_key, None)
+        if err is not None:
+            raise CloudInterfaceError("error initiating object upload", err,
+                                      upload_result.error.contents.code)
+
+        upload = upload_result.upload
+        buf_reader = BufferedReader(fileobj, 256)
+        for data in buf_reader:
+            data_size = len(data)
+            data = (c.c_uint8 * c.c_int32(data_size).value)(*data)
+            data_ptr = c.cast(data, c.POINTER(c.c_uint8))
+
+            # iterate until all data is uploaded
+            written_bytes = 0
+            while data_size > written_bytes:
+                write_result, err = self.uplink.upload_write(upload, data_ptr,
+                                                             len(data))
+                if err is not None:
+                    raise CloudInterfaceError(
+                        "error uploading the object data",
+                        err, write_result.error.contents.code)
+
+                written_bytes += write_result.bytes_written
+                data = data[write_result.bytes_written:]
+
+        err = self.uplink.upload_commit(upload)
+        if err is not None:
+            raise CloudInterfaceError("error committing object upload", err)
+
+    def create_multipart_upload(self, key):
+        """
+        Create a new multipart upload
+
+        :param key: The key to use in the cloud service
+        :return: The multipart upload handle
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        return self.s3.meta.client.create_multipart_upload(
+            Bucket=self.bucket_name, Key=key)
+        """
+
+    def async_upload_part(self, mpu, key, body, part_number):
+        """
+        Asynchronously upload a part into a multipart upload
+
+        :param mpu: The multipart upload handle
+        :param str key: The key to use in the cloud service
+        :param any body: A stream-like object to upload
+        :param int part_number: Part number, starting from 1
+        :return: The part handle
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+
+        # If an error has already been reported, do nothing
+        if self.error:
+            return
+
+        self._ensure_async()
+        self._handle_async_errors()
+
+        # Save the upload start time of the part
+        stats = self.upload_stats[key]
+        stats.set_part_start_time(part_number, datetime.datetime.now())
+
+        # If the body is a named temporary file use it directly
+        # WARNING: this imply that the file will be deleted after the upload
+        if hasattr(body, 'name') and hasattr(body, 'delete') and \
+                not body.delete:
+            fp = body
+        else:
+            # Write a temporary file with the part contents
+            with NamedTemporaryFile(delete=False) as fp:
+                shutil.copyfileobj(body, fp, BUFSIZE)
+
+        # Pass the job to the uploader process
+        self.queue.put({
+            "job_type": "upload_part",
+            "mpu": mpu,
+            "key": key,
+            "body": fp.name,
+            "part_number": part_number,
+        })
+        """
+
+    def upload_part(self, mpu, key, body, part_number):
+        """
+        Upload a part into this multipart upload
+
+        :param mpu: The multipart upload handle
+        :param str key: The key to use in the cloud service
+        :param object body: A stream-like object to upload
+        :param int part_number: Part number, starting from 1
+        :return: The part handle
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        part = self.s3.meta.client.upload_part(
+            Body=body,
+            Bucket=self.bucket_name,
+            Key=key,
+            UploadId=mpu["UploadId"],
+            PartNumber=part_number)
+        return {
+            'PartNumber': part_number,
+            'ETag': part['ETag'],
+        }
+        """
+
+    def async_complete_multipart_upload(self, mpu, key, parts_count):
+        """
+        Asynchronously finish a certain multipart upload. This method grant
+        that the final S3 call will happen after all the already scheduled
+        parts have been uploaded.
+
+        :param mpu:  The multipart upload handle
+        :param str key: The key to use in the cloud service
+        :param int parts_count: Number of parts
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+
+        # If an error has already been reported, do nothing
+        if self.error:
+            return
+
+        self._ensure_async()
+        self._handle_async_errors()
+
+        # If parts_db has less then expected parts for this upload,
+        # wait for the workers to send the missing metadata
+        while len(self.parts_db[key]) < parts_count:
+            # Wait for all the current jobs to be completed and
+            # receive all available updates on worker status
+            self._retrieve_results()
+
+        # Finish the job in S3 to the uploader process
+        self.queue.put({
+            "job_type": "complete_multipart_upload",
+            "mpu": mpu,
+            "key": key,
+            "parts": self.parts_db[key],
+        })
+        del self.parts_db[key]
+        """
+
+    def complete_multipart_upload(self, mpu, key, parts):
+        """
+        Finish a certain multipart upload
+
+        :param mpu:  The multipart upload handle
+        :param str key: The key to use in the cloud service
+        :param parts: The list of parts composing the multipart upload
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        self.s3.meta.client.complete_multipart_upload(
+            Bucket=self.bucket_name,
+            Key=key,
+            UploadId=mpu["UploadId"],
+            MultipartUpload={"Parts": parts})
+        """
+
+    def abort_multipart_upload(self, mpu, key):
+        """
+        Abort a certain multipart upload
+
+        :param mpu:  The multipart upload handle
+        :param str key: The key to use in the cloud service
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        self.s3.meta.client.abort_multipart_upload(
+            Bucket=self.bucket_name,
+            Key=key,
+            UploadId=mpu["UploadId"])
+        """
+
+    def wait_for_multipart_upload(self, key):
+        """
+        Wait for a multipart upload to be completed and return the result
+
+        :param str key: The key to use in the cloud service
+        """
+        raise CloudInterfaceError("not implemented")
+        """
+        # The upload must exist
+        assert key in self.upload_stats
+        # async_complete_multipart_upload must have been called
+        assert key not in self.parts_db
+
+        # If status is still uploading the upload has not finished yet
+        while self.upload_stats[key]['status'] == 'uploading':
+            # Wait for all the current jobs to be completed and
+            # receive all available updates on worker status
+            self._retrieve_results()
+
+        return self.upload_stats[key]
+        """
+
+
+class CloudInterfaceError(Exception):
+    """
+    This exception is raised when there are some CloudInterface implementation
+    error
+    """
+
+    def __init__(self,  message, raw_message="",  code=0):
+        """
+        Create a new CloudInterfaceError instance given the error message, and
+        optionally an original error message and code.
+
+        :param str message: A human readable message
+        :param str raw_message: An original error message if any
+        :param int code: The original error code if any
+        """
+        self.message = message
+        self.raw_message = raw_message
+        self.code = code
