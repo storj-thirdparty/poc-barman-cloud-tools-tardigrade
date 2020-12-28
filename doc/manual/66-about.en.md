@@ -36,7 +36,7 @@ accept patches from external developers, as long as:
 - source code is properly documented and contains relevant comments.
 - code supplied is covered by unit tests.
 - no unrelated feature is compromised or broken.
-- source code is rebased on the current master branch.
+- source code is rebased on the current main branch.
 - commits and pull requests are limited to a single feature (multi-feature
 patches are hard to test and review).
 - changes to the user interface are discussed beforehand with 2ndQuadrant.
